@@ -391,10 +391,14 @@ class IOAndReportTests(unittest.TestCase):
         )
         self.assertIn("ПРОГНОЗ ТУРНИРА", text)
         self.assertIn("Вероятности мест", text)
+        self.assertIn("Симуляций", text)
         payload = report_to_dict(
             tournament, model, result, team="A", target_place=1, top=3
         )
         self.assertEqual(payload["team_analysis"]["target_place"], 1)
+        observations = payload["team_analysis"]["place_observations"]
+        self.assertEqual(len(observations), 3)
+        self.assertEqual(sum(observations), 500)
         self.assertAlmostEqual(
             sum(payload["team_analysis"]["place_probabilities"]), 1.0
         )
@@ -417,6 +421,7 @@ class IOAndReportTests(unittest.TestCase):
         self.assertIn("## Стартовый гандикап", markdown)
         self.assertIn("## Команда «A»", markdown)
         self.assertIn("### Вероятности мест", markdown)
+        self.assertIn("| Место | Вероятность | Симуляций |", markdown)
         self.assertIn("### Сценарии для 1-го места", markdown)
         self.assertIn("| Матч | 3:0 | 3:1 | 3:2 | 2:3 | 1:3 | 0:3 | Мода |", markdown)
         # Все строки таблиц должны начинаться с «|».

@@ -204,11 +204,21 @@ def _format_team_section(
 
     lines.append("")
     lines.append("  Вероятности мест:")
+    lines.append(
+        f"   {'Место':>5}  {'Вероятность':>11}  {'Симуляций':>9}"
+    )
     best = max(forecast.place_probs) if forecast.place_probs else 0.0
+    observations_by_place = result.place_counts or []
     for place, probability in enumerate(forecast.place_probs, 1):
         bar_length = round(probability / best * 24) if best else 0
+        observations = (
+            observations_by_place[place - 1]
+            if place - 1 < len(observations_by_place)
+            else 0
+        )
         lines.append(
-            f"    {place:>2}-е  {_pct(probability):>6}%  {'█' * bar_length}"
+            f"   {place:>3}-е  {_pct(probability):>10}%  "
+            f"{observations:>9}  {'█' * bar_length}"
         )
     place_count = len(forecast.place_probs)
     top3 = min(3, place_count)
@@ -633,14 +643,27 @@ def format_markdown(
     top3 = min(3, place_count)
     top5 = min(5, place_count)
     lines.extend(["", "### Вероятности мест", ""])
+    observations_by_place = analysis.get("place_observations") or []
     rows = [
-        [f"{place}-е", f"{probability * 100:.1f}%"]
+        [
+            f"{place}-е",
+            f"{probability * 100:.1f}%",
+            (
+                observations_by_place[place - 1]
+                if place - 1 < len(observations_by_place)
+                else 0
+            ),
+        ]
         for place, probability in enumerate(
             analysis["place_probabilities"], 1
         )
     ]
     lines.extend(
-        _md_table(["Место", "Вероятность"], rows, ["right", "right"])
+        _md_table(
+            ["Место", "Вероятность", "Симуляций"],
+            rows,
+            ["right", "right", "right"],
+        )
     )
     summary = (
         f"**P(1–{top3}):** "
@@ -837,6 +860,7 @@ def report_to_dict(
                 "sets_lost": standings[team].sets_lost,
             },
             "place_probabilities": forecast.place_probs,
+            "place_observations": list(result.place_counts or []),
             "target_place": target_place,
             "target_place_probability": forecast.place_probs[target_place - 1],
             "target_place_observations": (
