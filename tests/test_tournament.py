@@ -17,6 +17,7 @@ from volley.tournament import (
     TournamentError,
     load_tournament,
     points_for,
+    repeated_pair_suffixes,
     save_tournament,
 )
 
@@ -113,6 +114,109 @@ class HandicapTests(unittest.TestCase):
         )
         self.assertEqual(result.forecasts["A"].place_probs, [1.0, 0.0])
         self.assertGreaterEqual(result.forecasts["A"].expected_wins, 2.0)
+
+
+class RoundsTests(unittest.TestCase):
+    def test_double_round_schedule(self):
+        tournament = Tournament(["A", "B", "C"], rounds=2)
+        self.assertEqual(tournament.total_matches, 6)
+        remaining = tournament.remaining_pairs()
+        self.assertEqual(remaining.count(("A", "B")), 2)
+        self.assertEqual(remaining.count(("A", "C")), 2)
+        self.assertEqual(remaining.count(("B", "C")), 2)
+        self.assertEqual(len(remaining), 6)
+
+    def test_two_meetings_allowed(self):
+        tournament = Tournament(["A", "B"], rounds=2)
+        tournament.add_result("A", "B", "3:0")
+        tournament.add_result("B", "A", "3:2")
+        self.assertEqual(tournament.remaining_pairs(), [])
+        standings = tournament.standings()
+        self.assertEqual((standings["A"].played, standings["B"].played), (2, 2))
+        self.assertEqual((standings["A"].wins, standings["B"].wins), (1, 1))
+        with self.assertRaises(TournamentError):
+            tournament.add_result("A", "B", "3:1")
+
+    def test_third_meeting_rejected_on_load(self):
+        with self.assertRaises(TournamentError):
+            Tournament(
+                ["A", "B"],
+                [
+                    Match("A", "B", 3, 0),
+                    Match("B", "A", 3, 1),
+                    Match("A", "B", 3, 2),
+                ],
+                rounds=2,
+            )
+
+    def test_rounds_roundtrip(self):
+        tournament = Tournament(["A", "B"], [Match("A", "B", 3, 0)], rounds=2)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "tournament.json"
+            save_tournament(tournament, path)
+            saved = path.read_text(encoding="utf-8")
+            loaded = load_tournament(path)
+        self.assertIn('"rounds": 2', saved)
+        self.assertEqual(loaded.rounds, 2)
+        self.assertEqual(loaded.total_matches, 2)
+
+    def test_single_round_rounds_not_saved(self):
+        tournament = Tournament(["A", "B"])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "tournament.json"
+            save_tournament(tournament, path)
+            saved = path.read_text(encoding="utf-8")
+            loaded = load_tournament(path)
+        self.assertNotIn('"rounds"', saved)
+        self.assertEqual(loaded.rounds, 1)
+
+    def test_invalid_rounds(self):
+        for rounds in (0, -1, True, 1.5):
+            with self.assertRaises(TournamentError):
+                Tournament(["A", "B"], rounds=rounds)
+
+    def test_pair_suffixes(self):
+        suffixes = repeated_pair_suffixes([("A", "B"), ("A", "B"), ("A", "C")])
+        self.assertEqual(suffixes, [" (1/2)", " (2/2)", ""])
+
+    def test_simulation_double_round(self):
+        tournament = Tournament(["A", "B"], rounds=2)
+        model = fit_model(tournament.teams, tournament.matches)
+        result = simulate(
+            tournament, model, sims=300, seed=11, team="A", uncertainty=False
+        )
+        self.assertEqual(len(result.remaining), 2)
+        self.assertEqual(len(result.forecasts["A"].place_probs), 2)
+        self.assertAlmostEqual(
+            sum(forecast.expected_wins for forecast in result.forecasts.values()),
+            2.0,
+        )
+        self.assertAlmostEqual(
+            sum(result.forecasts["A"].place_probs), 1.0
+        )
+
+    def test_reports_show_rounds_and_legs(self):
+        tournament = Tournament(["A", "B"], rounds=2)
+        model = fit_model(tournament.teams, tournament.matches)
+        result = simulate(
+            tournament, model, sims=400, seed=5, team="A", uncertainty=False
+        )
+        text = format_report(
+            tournament, model, result, team="A", target_place=1, top=3
+        )
+        self.assertIn("Формат: два круга", text)
+        self.assertIn("A — B (1/2)", text)
+        self.assertIn("A — B (2/2)", text)
+        markdown = format_markdown(
+            tournament, model, result, team="A", target_place=1, top=3
+        )
+        self.assertIn("**Формат:** два круга", markdown)
+        self.assertIn("A — B (1/2)", markdown)
+        payload = report_to_dict(
+            tournament, model, result, team="A", target_place=1, top=3
+        )
+        self.assertEqual(payload["rounds"], 2)
+        self.assertEqual(len(payload["remaining_matches"]), 2)
 
 
 class ValidationTests(unittest.TestCase):

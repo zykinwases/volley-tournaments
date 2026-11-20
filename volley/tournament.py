@@ -5,6 +5,7 @@
     {
       "name": "Летний кубок",
       "teams": ["Команда A", "Команда B", ...],
+      "rounds": 2,
       "handicap": {
         "Команда A": {"wins": 2, "points": 5}
       },
@@ -15,16 +16,20 @@
     }
 
 В файле хранятся только сыгранные матчи. Несыгранные пары вычисляются
-из списка команд (круг в один круг). Поле ``handicap`` необязательно:
-стартовые победы и очки прибавляются к набранным в турнире, но не
-учитываются как сыгранные матчи и не влияют на соотношение партий.
+из списка команд: ``rounds`` задаёт число кругов (по умолчанию 1, то есть
+каждая пара играет один раз; при 2 — дважды). Поле ``handicap``
+необязательно: стартовые победы и очки прибавляются к набранным в турнире,
+но не учитываются как сыгранные матчи и не влияют на соотношение партий.
 """
 
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from .text import plural, rounds_label
 
 # Возможные исходы матча в порядке (3:0, 3:1, 3:2, 2:3, 1:3, 0:3)
 # для пары (a, b): первые три — победы a, последние три — победы b.
@@ -158,6 +163,27 @@ def standing_key(standing: Standing) -> tuple:
     )
 
 
+def repeated_pair_suffixes(
+    pairs: list[tuple[str, str]],
+) -> list[str]:
+    """Суффиксы «(1/2)», «(2/2)» для пар, встречающихся несколько раз.
+
+    В турнире в два круга одна и та же пара может остаться дважды. Суффикс
+    показывает, какая по счёту из оставшихся встреч имеется в виду.
+    """
+    totals = Counter(frozenset(pair) for pair in pairs)
+    seen: Counter = Counter()
+    suffixes: list[str] = []
+    for pair in pairs:
+        key = frozenset(pair)
+        if totals[key] > 1:
+            seen[key] += 1
+            suffixes.append(f" ({seen[key]}/{totals[key]})")
+        else:
+            suffixes.append("")
+    return suffixes
+
+
 def _normalize_handicap(
     raw: object, team_set: set[str]
 ) -> dict[str, tuple[int, int]]:
@@ -218,6 +244,8 @@ class Tournament:
     # Стартовый гандикап: команда -> (победы, очки). Прибавляется к итоговым
     # победам и очкам, но не считается сыгранными матчами и не влияет на партии.
     handicap: dict[str, tuple[int, int]] = field(default_factory=dict)
+    # Число кругов: 1 — каждая пара играет один раз, 2 — дважды.
+    rounds: int = 1
     _team_set: set[str] = field(init=False, repr=False, default_factory=set)
 
     def __post_init__(self) -> None:
@@ -228,35 +256,48 @@ class Tournament:
             raise TournamentError("Названия команд должны быть уникальными")
         if any(not isinstance(t, str) or not t.strip() for t in self.teams):
             raise TournamentError("Название команды не может быть пустым")
+        if (
+            isinstance(self.rounds, bool)
+            or not isinstance(self.rounds, int)
+            or self.rounds < 1
+        ):
+            raise TournamentError(
+                "Количество кругов должно быть целым числом не меньше 1"
+            )
 
         self._team_set = set(self.teams)
         self.handicap = _normalize_handicap(self.handicap, self._team_set)
-        max_matches = len(self.teams) * (len(self.teams) - 1) // 2
+        max_matches = self.rounds * len(self.teams) * (len(self.teams) - 1) // 2
         if len(self.matches) > max_matches:
             raise TournamentError(
-                f"Матчей больше, чем возможно в один круг: "
+                f"Матчей больше, чем возможно за {rounds_label(self.rounds)}: "
                 f"{len(self.matches)} > {max_matches}"
             )
 
-        seen: set[frozenset[str]] = set()
+        played_pairs: Counter = Counter()
         for match in self.matches:
             if match.a not in self._team_set:
                 raise TournamentError(f"Неизвестная команда: {match.a!r}")
             if match.b not in self._team_set:
                 raise TournamentError(f"Неизвестная команда: {match.b!r}")
             pair = frozenset((match.a, match.b))
-            if pair in seen:
+            played_pairs[pair] += 1
+            if played_pairs[pair] > self.rounds:
                 raise TournamentError(
-                    f"Пара {match.a!r} — {match.b!r} уже встречалась: "
-                    "в один круг допускается только один матч"
+                    f"Пара {match.a!r} — {match.b!r} уже встречалась "
+                    f"{played_pairs[pair]} "
+                    f"{plural(played_pairs[pair], 'раз', 'раза', 'раз')}: "
+                    f"за {rounds_label(self.rounds)} допускается не более "
+                    f"{self.rounds} "
+                    f"{plural(self.rounds, 'матч', 'матча', 'матчей')} "
+                    "между парой"
                 )
-            seen.add(pair)
 
     # ------------------------------------------------------------------ Table
 
     @property
     def total_matches(self) -> int:
-        return len(self.teams) * (len(self.teams) - 1) // 2
+        return self.rounds * len(self.teams) * (len(self.teams) - 1) // 2
 
     def initial_wins(self, team: str) -> int:
         return self.handicap.get(team, (0, 0))[0]
@@ -294,12 +335,13 @@ class Tournament:
         return sorted(self.standings().values(), key=standing_key)
 
     def remaining_pairs(self) -> list[tuple[str, str]]:
-        played = {frozenset((m.a, m.b)) for m in self.matches}
+        """Оставшиеся матчи; пара повторяется столько раз, сколько кругов впереди."""
+        played_pairs = Counter(frozenset((m.a, m.b)) for m in self.matches)
         pairs: list[tuple[str, str]] = []
         for i, a in enumerate(self.teams):
             for b in self.teams[i + 1 :]:
-                if frozenset((a, b)) not in played:
-                    pairs.append((a, b))
+                left = self.rounds - played_pairs[frozenset((a, b))]
+                pairs.extend((a, b) for _ in range(max(left, 0)))
         return pairs
 
     # ----------------------------------------------------------------- Editing
@@ -312,11 +354,15 @@ class Tournament:
         if a == b:
             raise TournamentError("Команда не может играть сама с собой")
         pair = frozenset((a, b))
-        for match in self.matches:
-            if frozenset((match.a, match.b)) == pair:
-                raise TournamentError(
-                    f"Матч {a!r} — {b!r} уже сыгран ({match.score_text()})"
-                )
+        meetings = sum(
+            1 for match in self.matches if frozenset((match.a, match.b)) == pair
+        )
+        if meetings >= self.rounds:
+            raise TournamentError(
+                f"Пара {a!r} — {b!r} уже встречалась {meetings} "
+                f"{plural(meetings, 'раз', 'раза', 'раз')}: "
+                f"за {rounds_label(self.rounds)} больше матчей между ними нет"
+            )
         a_sets, b_sets = parse_score(score)
         match = Match(a, b, a_sets, b_sets)
         self.matches.append(match)
@@ -375,8 +421,20 @@ def load_tournament(path: str | Path) -> Tournament:
             "Поле «handicap» должно быть объектом вида "
             '{"Команда": {"wins": 2, "points": 5}}'
         )
+
+    rounds = raw.get("rounds", 1)
+    if isinstance(rounds, bool) or not isinstance(rounds, int):
+        raise TournamentError("Поле «rounds» должно быть целым числом")
+    if rounds < 1:
+        raise TournamentError(
+            "Поле «rounds» должно быть не меньше 1"
+        )
     return Tournament(
-        teams=teams, matches=matches, name=name, handicap=handicap
+        teams=teams,
+        matches=matches,
+        name=name,
+        handicap=handicap,
+        rounds=rounds,
     )
 
 
@@ -386,6 +444,8 @@ def save_tournament(tournament: Tournament, path: str | Path) -> None:
         "name": tournament.name,
         "teams": tournament.teams,
     }
+    if tournament.rounds != 1:
+        data["rounds"] = tournament.rounds
     if tournament.handicap:
         data["handicap"] = {
             team: {"wins": wins, "points": points}

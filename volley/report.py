@@ -1,4 +1,4 @@
-"""Текстовый отчёт и экспорт прогноза в JSON."""
+"""Текстовый и Markdown-отчёт, а также экспорт прогноза в JSON."""
 
 from __future__ import annotations
 
@@ -7,21 +7,15 @@ import textwrap
 
 from .model import StrengthModel
 from .simulate import SimulationResult
-from .tournament import OUTCOMES, Tournament
+from .text import plural as _plural
+from .text import rounds_label
+from .tournament import OUTCOMES, Tournament, repeated_pair_suffixes
 
 LINE_WIDTH = 100
 
 
 def _pct(value: float, digits: int = 1) -> str:
     return f"{value * 100:.{digits}f}"
-
-
-def _plural(number: int, one: str, few: str, many: str) -> str:
-    if number % 10 == 1 and number % 100 != 11:
-        return one
-    if number % 10 in (2, 3, 4) and number % 100 not in (12, 13, 14):
-        return few
-    return many
 
 
 def _ratio(sets_won: float, sets_lost: float) -> str:
@@ -260,12 +254,13 @@ def _format_team_section(
         f"{'2:3':>7}{'1:3':>7}{'0:3':>7}{'Мода':>9}"
     )
     assert result.conditional_outcomes is not None
+    suffixes = repeated_pair_suffixes(result.remaining)
     for match_index in range(len(result.remaining)):
         probabilities = result.conditional_outcomes[target_place - 1][match_index]
         a, b, oriented = _oriented_match(
             result, match_index, probabilities, team
         )
-        label = f"{a} — {b}"
+        label = f"{a} — {b}{suffixes[match_index]}"
         if len(label) > 29:
             label = label[:28] + "…"
         best = max(oriented)
@@ -303,7 +298,9 @@ def _format_team_section(
                 if team == b:
                     a, b = b, a
                     a_sets, b_sets = b_sets, a_sets
-                parts.append(f"{a}—{b} {a_sets}:{b_sets}")
+                parts.append(
+                    f"{a}—{b}{suffixes[match_index]} {a_sets}:{b_sets}"
+                )
             lines.append(
                 f"  {number}) {_pct(scenario.probability_given_place, 2)}% "
                 f"при условии места "
@@ -343,6 +340,12 @@ def format_report(
     lines.append(
         f"Сыграно матчей: {played} из {total} (осталось {total - played})"
     )
+    if tournament.rounds != 1:
+        lines.append(
+            f"Формат: {rounds_label(tournament.rounds)} — каждая пара "
+            f"встречается {tournament.rounds} "
+            f"{_plural(tournament.rounds, 'раз', 'раза', 'раз')}"
+        )
     mode = (
         "с учётом неопределённости оценок"
         if uncertainty
@@ -433,6 +436,12 @@ def format_markdown(
         f"{data['total_matches']} "
         f"(осталось {data['total_matches'] - data['played_matches']})"
     )
+    if data["rounds"] != 1:
+        lines.append(
+            f"- **Формат:** {rounds_label(data['rounds'])} — каждая пара "
+            f"встречается {data['rounds']} "
+            f"{_plural(data['rounds'], 'раз', 'раза', 'раз')}"
+        )
     mode = (
         "с учётом неопределённости оценок"
         if data["model"]["rating_uncertainty"]
@@ -675,7 +684,10 @@ def format_markdown(
         ]
     )
     rows = []
-    for match in analysis["conditional_matches"]:
+    suffixes = repeated_pair_suffixes(
+        [(match["a"], match["b"]) for match in analysis["conditional_matches"]]
+    )
+    for match, suffix in zip(analysis["conditional_matches"], suffixes):
         outcomes = match["outcomes"]
         best = max(outcomes.values())
         modes = [
@@ -684,7 +696,7 @@ def format_markdown(
             if best - outcomes.get(key, 0.0) < 1e-9
         ]
         rows.append(
-            [f"{match['a']} — {match['b']}"]
+            [f"{match['a']} — {match['b']}{suffix}"]
             + [f"{outcomes.get(key, 0.0) * 100:.1f}" for key in _MD_ORDER]
             + ["/".join(modes)]
         )
@@ -715,10 +727,11 @@ def format_markdown(
                 f"при условии места "
                 f"({scenario['probability'] * 100:.3f}% безусловно)"
             )
-            for item in scenario["results"]:
+            for match_index, item in enumerate(scenario["results"]):
                 lines.append(
                     f"   - {_md_escape(item['a'])}—"
-                    f"{_md_escape(item['b'])} {item['score']}"
+                    f"{_md_escape(item['b'])}{suffixes[match_index]} "
+                    f"{item['score']}"
                 )
 
     return "\n".join(lines)
@@ -741,6 +754,7 @@ def report_to_dict(
 
     data: dict = {
         "tournament": tournament.name,
+        "rounds": tournament.rounds,
         "played_matches": len(tournament.matches),
         "total_matches": tournament.total_matches,
         "simulations": result.sims,

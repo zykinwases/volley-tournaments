@@ -9,6 +9,7 @@
     python main.py standings --data data/example.json
     python main.py add-result --data data/example.json "Зенит" "Динамо" 3:1
     python main.py new --teams "A,B,C" --out data/new.json
+    python main.py new --teams "A,B,C" --rounds 2 --out data/new.json
 """
 
 from __future__ import annotations
@@ -22,10 +23,13 @@ from pathlib import Path
 from volley.model import DEFAULT_PRIOR, fit_model
 from volley.report import format_markdown, format_report, report_to_dict
 from volley.simulate import simulate
+from volley.text import plural as _plural
+from volley.text import rounds_label
 from volley.tournament import (
     Tournament,
     TournamentError,
     load_tournament,
+    repeated_pair_suffixes,
     save_tournament,
 )
 
@@ -70,14 +74,6 @@ def _parse_handicap(
             )
         result[team] = (wins, points)
     return result
-
-
-def _plural(number: int, one: str, few: str, many: str) -> str:
-    if number % 10 == 1 and number % 100 != 11:
-        return one
-    if number % 10 in (2, 3, 4) and number % 100 not in (12, 13, 14):
-        return few
-    return many
 
 
 def _positive_int(value: str) -> int:
@@ -192,8 +188,10 @@ def cmd_standings(args: argparse.Namespace) -> int:
     print(f"Турнир: {tournament.name}" if tournament.name else "Турнир")
     print(
         f"Сыграно {len(tournament.matches)} из {tournament.total_matches} "
-        f"{_plural(tournament.total_matches, 'матча', 'матчей', 'матчей')}"
+        f"{_plural(tournament.total_matches, 'матч', 'матча', 'матчей')}"
     )
+    if tournament.rounds != 1:
+        print(f"Формат: {rounds_label(tournament.rounds)}")
     print()
     print(
         f"  {'#':>2}  {'Команда':<22}{'И':>3}{'В':>4}{'О':>4}"
@@ -216,8 +214,9 @@ def cmd_standings(args: argparse.Namespace) -> int:
     remaining = tournament.remaining_pairs()
     if remaining and args.remaining:
         print("\nОставшиеся матчи:")
-        for a, b in remaining:
-            print(f"  {a} — {b}")
+        suffixes = repeated_pair_suffixes(remaining)
+        for (a, b), suffix in zip(remaining, suffixes):
+            print(f"  {a} — {b}{suffix}")
     return 0
 
 
@@ -227,7 +226,8 @@ def cmd_add_result(args: argparse.Namespace) -> int:
     save_tournament(tournament, args.data)
     print(
         f"Добавлен матч: {match.a} — {match.b} {match.score_text()}. "
-        f"Всего матчей: {len(tournament.matches)}."
+        f"Всего матчей: {len(tournament.matches)} из "
+        f"{tournament.total_matches}."
     )
     return 0
 
@@ -238,14 +238,21 @@ def cmd_new(args: argparse.Namespace) -> int:
         print("Ошибка: нужно хотя бы две команды через запятую", file=sys.stderr)
         return 2
     handicap = _parse_handicap(args.handicap, teams)
-    tournament = Tournament(teams=teams, name=args.name, handicap=handicap)
+    tournament = Tournament(
+        teams=teams, name=args.name, handicap=handicap, rounds=args.rounds
+    )
     save_tournament(tournament, args.out)
     print(
         f"Создан турнир «{tournament.name or 'без названия'}»: "
         f"{len(teams)} {_plural(len(teams), 'команда', 'команды', 'команд')}, "
         f"{tournament.total_matches} "
-        f"{_plural(tournament.total_matches, 'матч', 'матча', 'матчей')}. "
-        f"Файл: {args.out}"
+        f"{_plural(tournament.total_matches, 'матч', 'матча', 'матчей')}"
+        + (
+            f" ({rounds_label(tournament.rounds)})"
+            if tournament.rounds != 1
+            else ""
+        )
+        + f". Файл: {args.out}"
     )
     if handicap:
         summary = ", ".join(
@@ -321,6 +328,13 @@ def build_parser() -> argparse.ArgumentParser:
     new = subparsers.add_parser("new", help="создать пустой турнир")
     new.add_argument("--teams", required=True, help="команды через запятую")
     new.add_argument("--name", default="", help="название турнира")
+    new.add_argument(
+        "--rounds",
+        type=_positive_int,
+        default=1,
+        help="число кругов: 1 — каждая пара играет один раз, "
+        "2 — дважды (по умолчанию 1)",
+    )
     new.add_argument(
         "--handicap",
         action="append",
