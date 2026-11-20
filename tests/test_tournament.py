@@ -1,9 +1,11 @@
+import io
 import math
 import tempfile
 import unittest
 from pathlib import Path
 
 from volley.model import fit_model
+from volley.progress import ProgressBar
 from volley.report import (
     _md_escape,
     format_markdown,
@@ -217,6 +219,46 @@ class RoundsTests(unittest.TestCase):
         )
         self.assertEqual(payload["rounds"], 2)
         self.assertEqual(len(payload["remaining_matches"]), 2)
+
+
+class ProgressTests(unittest.TestCase):
+    def test_simulate_progress_callback(self):
+        tournament = Tournament(["A", "B", "C"])
+        model = fit_model(tournament.teams, tournament.matches)
+        seen: list[int] = []
+        simulate(
+            tournament,
+            model,
+            sims=450,
+            seed=1,
+            uncertainty=False,
+            progress=seen.append,
+        )
+        self.assertEqual(seen[-1], 450)
+        self.assertEqual(seen, sorted(seen))
+        self.assertEqual(len(seen), len(set(seen)))
+        self.assertGreater(len(seen), 1)
+
+    def test_progress_bar_output(self):
+        stream = io.StringIO()
+        bar = ProgressBar(100_000, stream=stream, min_interval=0.0)
+        bar.start()
+        bar.update(50_000)
+        bar.close()
+        text = stream.getvalue()
+        self.assertIn("0.0%", text)
+        self.assertIn("50.0%", text)
+        self.assertIn("100.0%", text)
+        self.assertIn("50 000/100 000", text)
+        self.assertTrue(text.endswith("\n"))
+
+    def test_progress_bar_disabled_is_silent(self):
+        stream = io.StringIO()
+        bar = ProgressBar(100, stream=stream, enabled=False)
+        bar.start()
+        bar.update(50)
+        bar.close()
+        self.assertEqual(stream.getvalue(), "")
 
 
 class ValidationTests(unittest.TestCase):

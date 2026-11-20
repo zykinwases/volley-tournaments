@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 
 from volley.model import DEFAULT_PRIOR, fit_model
+from volley.progress import ProgressBar
 from volley.report import format_markdown, format_report, report_to_dict
 from volley.simulate import simulate
 from volley.text import plural as _plural
@@ -124,7 +125,12 @@ def cmd_predict(args: argparse.Namespace) -> int:
         return 2
 
     model = fit_model(tournament.teams, tournament.matches, prior=args.prior)
+    show_progress = (
+        args.progress if args.progress is not None else sys.stderr.isatty()
+    )
+    bar = ProgressBar(args.sims, enabled=show_progress)
     started = time.perf_counter()
+    bar.start()
     result = simulate(
         tournament,
         model,
@@ -132,8 +138,10 @@ def cmd_predict(args: argparse.Namespace) -> int:
         seed=args.seed,
         team=args.team,
         uncertainty=not args.no_uncertainty,
+        progress=bar.update,
     )
     elapsed = time.perf_counter() - started
+    bar.close()
 
     report = format_report(
         tournament,
@@ -304,6 +312,19 @@ def build_parser() -> argparse.ArgumentParser:
         dest="markdown",
         metavar="PATH",
         help="сохранить отчёт в Markdown",
+    )
+    predict.add_argument(
+        "--progress",
+        dest="progress",
+        action="store_true",
+        default=None,
+        help="показывать прогресс-бар (по умолчанию — только в терминале)",
+    )
+    predict.add_argument(
+        "--no-progress",
+        dest="progress",
+        action="store_false",
+        help="не показывать прогресс-бар",
     )
     predict.set_defaults(func=cmd_predict)
 

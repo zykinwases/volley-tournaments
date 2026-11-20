@@ -5,6 +5,7 @@ from __future__ import annotations
 import random
 from collections import Counter
 from dataclasses import dataclass
+from typing import Callable
 
 from .model import StrengthModel
 from .tournament import Tournament
@@ -112,12 +113,16 @@ def simulate(
     uncertainty: bool = True,
     rating_draws: int = 64,
     scenarios_per_place: int = 25,
+    progress: Callable[[int], None] | None = None,
 ) -> SimulationResult:
     """Разыгрывает оставшиеся матчи ``sims`` раз.
 
     При ``uncertainty=True`` рейтинги на каждую серию испытаний берутся
     случайно из апостериорного распределения, что учитывает неполноту
     турнирных данных. При ``uncertainty=False`` используются точечные оценки.
+
+    ``progress`` — необязательный колбэк, который периодически получает
+    число уже разыгранных турниров (для индикатора прогресса).
     """
     if sims < 1:
         raise ValueError("Число симуляций должно быть положительным")
@@ -158,6 +163,8 @@ def simulate(
     draws = 1 if not uncertainty else max(1, min(rating_draws, sims))
     base = sims // draws
     extra = sims % draws
+    progress_step = max(1, sims // 200)
+    done = 0
 
     for draw_index in range(draws):
         batch = base + (1 if draw_index < extra else 0)
@@ -221,6 +228,12 @@ def simulate(
                 for match_index, outcome in enumerate(outcomes):
                     conditional_counts[position][match_index][outcome] += 1
                 scenario_counts[position][tuple(outcomes)] += 1
+
+            done += 1
+            if progress is not None and (
+                done % progress_step == 0 or done == sims
+            ):
+                progress(done)
 
     forecasts: dict[str, TeamForecast] = {}
     for team_id, name in enumerate(teams):
