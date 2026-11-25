@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import textwrap
 
+from .cases import CaseAnalysis, TeamCases
 from .model import StrengthModel
 from .simulate import SimulationResult
 from .text import plural as _plural
@@ -170,12 +171,44 @@ def _oriented_match(
     return a, b, probabilities
 
 
+def _case_to_dict(case: CaseAnalysis) -> dict:
+    return {
+        "wins": case.wins,
+        "losses": case.losses,
+        "win_score": case.win_score,
+        "loss_score": case.loss_score,
+        "place_probabilities": case.place_probabilities,
+        "expected_place": case.expected_place,
+    }
+
+
+def _format_cases(cases: TeamCases) -> list[str]:
+    simulations = f"{cases.simulations:,}".replace(",", " ")
+    lines = [
+        "",
+        "  Разборы при заданных результатах команды "
+        f"(по {simulations} симуляций):",
+        "  Лучший — все оставшиеся матчи выиграны 3:0, "
+        "худший — проиграны 0:3.",
+        "  Остальные матчи разыгрываются по модели.",
+        "",
+        f"   {'Место':>5}  {'Лучший':>8}  {'Худший':>8}",
+    ]
+    for place in range(1, len(cases.best.place_probabilities) + 1):
+        best = f"{_pct(cases.best.place_probabilities[place - 1])}%"
+        worst = f"{_pct(cases.worst.place_probabilities[place - 1])}%"
+        lines.append(f"   {place:>3}-е  {best:>8}  {worst:>8}")
+    return lines
+
+
 def _format_team_section(
     tournament: Tournament,
     result: SimulationResult,
     team: str,
     target_place: int | None,
     top: int,
+    *,
+    cases: TeamCases | None = None,
 ) -> list[str]:
     forecast = result.forecasts[team]
     standings = tournament.standings()[team]
@@ -227,6 +260,9 @@ def _format_team_section(
     if top5 != top3:
         summary += f", P(1–{top5}) = {_pct(forecast.prob_places(1, top5))}%"
     lines.append(summary)
+
+    if cases is not None:
+        lines.extend(_format_cases(cases))
 
     if target_place is None:
         target_place = max(
@@ -338,6 +374,7 @@ def format_report(
     top: int = 5,
     uncertainty: bool | None = None,
     elapsed: float | None = None,
+    cases: TeamCases | None = None,
 ) -> str:
     played = len(tournament.matches)
     total = tournament.total_matches
@@ -386,7 +423,14 @@ def format_report(
 
     if team is not None:
         lines.extend(
-            _format_team_section(tournament, result, team, target_place, top)
+            _format_team_section(
+                tournament,
+                result,
+                team,
+                target_place,
+                top,
+                cases=cases,
+            )
         )
     else:
         lines.append("")
@@ -416,6 +460,24 @@ def _md_table(headers: list[str], rows: list[list[object]], align: list[str]) ->
     return lines
 
 
+def _md_case_table(
+    best: list[float], worst: list[float]
+) -> list[str]:
+    rows = [
+        [
+            f"{place}-е",
+            f"{best[place - 1] * 100:.1f}%",
+            f"{worst[place - 1] * 100:.1f}%",
+        ]
+        for place in range(1, len(best) + 1)
+    ]
+    return _md_table(
+        ["Место", "Лучший", "Худший"],
+        rows,
+        ["right", "right", "right"],
+    )
+
+
 def format_markdown(
     tournament: Tournament,
     model: StrengthModel,
@@ -426,6 +488,7 @@ def format_markdown(
     top: int = 5,
     uncertainty: bool | None = None,
     elapsed: float | None = None,
+    cases: TeamCases | None = None,
 ) -> str:
     """Отчёт в Markdown: заголовки, таблицы и списки."""
     data = report_to_dict(
@@ -436,6 +499,7 @@ def format_markdown(
         target_place=target_place,
         top=top,
         uncertainty=uncertainty,
+        cases=cases,
     )
 
     lines: list[str] = ["# Прогноз турнира", ""]
@@ -676,6 +740,24 @@ def format_markdown(
         )
     lines.extend(["", summary])
 
+    cases_data = analysis.get("cases")
+    if cases_data:
+        simulations = f"{cases_data['simulations']:,}".replace(",", " ")
+        lines.extend(["", "### Разборы при заданных результатах", ""])
+        lines.append(
+            "Лучший случай — все оставшиеся матчи выиграны 3:0, худший — "
+            "проиграны 0:3. По "
+            f"{simulations} симуляций на каждый разбор; остальные матчи "
+            "разыгрываются по модели."
+        )
+        lines.append("")
+        lines.extend(
+            _md_case_table(
+                cases_data["best"]["place_probabilities"],
+                cases_data["worst"]["place_probabilities"],
+            )
+        )
+
     # ---------------------------------------------------------- Сценарии
     target = analysis["target_place"]
     lines.extend(["", f"### Сценарии для {target}-го места", ""])
@@ -769,6 +851,7 @@ def report_to_dict(
     target_place: int | None = None,
     top: int = 5,
     uncertainty: bool | None = None,
+    cases: TeamCases | None = None,
 ) -> dict:
     standings = tournament.standings()
     ranking = tournament.ranking()
@@ -870,6 +953,15 @@ def report_to_dict(
             ),
             "conditional_matches": [],
             "scenarios": [],
+            "cases": (
+                {
+                    "simulations": cases.simulations,
+                    "worst": _case_to_dict(cases.worst),
+                    "best": _case_to_dict(cases.best),
+                }
+                if cases is not None
+                else None
+            ),
         }
 
         if result.conditional_outcomes and result.remaining:

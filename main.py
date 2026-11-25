@@ -20,6 +20,7 @@ import sys
 import time
 from pathlib import Path
 
+from volley.cases import build_team_cases
 from volley.model import DEFAULT_PRIOR, fit_model
 from volley.progress import ProgressBar
 from volley.report import format_markdown, format_report, report_to_dict
@@ -140,8 +141,33 @@ def cmd_predict(args: argparse.Namespace) -> int:
         uncertainty=not args.no_uncertainty,
         progress=bar.update,
     )
-    elapsed = time.perf_counter() - started
     bar.close()
+
+    cases = None
+    if args.team is not None:
+        case_bars: dict[str, ProgressBar] = {}
+
+        def case_progress(label: str, done: int, total: int) -> None:
+            case_bar = case_bars.get(label)
+            if case_bar is None:
+                case_bar = ProgressBar(total, label=label, enabled=show_progress)
+                case_bars[label] = case_bar
+                case_bar.start()
+            case_bar.update(done)
+
+        cases = build_team_cases(
+            tournament,
+            model,
+            team=args.team,
+            sims=args.sims,
+            seed=args.seed,
+            uncertainty=not args.no_uncertainty,
+            progress=case_progress,
+        )
+        for case_bar in case_bars.values():
+            case_bar.close()
+
+    elapsed = time.perf_counter() - started
 
     report = format_report(
         tournament,
@@ -152,6 +178,7 @@ def cmd_predict(args: argparse.Namespace) -> int:
         top=args.top,
         uncertainty=not args.no_uncertainty,
         elapsed=elapsed,
+        cases=cases,
     )
     print(report)
 
@@ -164,6 +191,7 @@ def cmd_predict(args: argparse.Namespace) -> int:
             target_place=args.place,
             top=args.top,
             uncertainty=not args.no_uncertainty,
+            cases=cases,
         )
         output = Path(args.json)
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -183,6 +211,7 @@ def cmd_predict(args: argparse.Namespace) -> int:
             top=args.top,
             uncertainty=not args.no_uncertainty,
             elapsed=elapsed,
+            cases=cases,
         )
         output = Path(args.markdown)
         output.parent.mkdir(parents=True, exist_ok=True)

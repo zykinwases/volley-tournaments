@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from volley.cases import build_team_cases
 from volley.model import fit_model
 from volley.progress import ProgressBar
 from volley.report import (
@@ -401,6 +402,151 @@ class SimulationTests(unittest.TestCase):
         for team in result.teams:
             self.assertAlmostEqual(
                 sum(result.forecasts[team].place_probs), 1.0, places=9
+            )
+
+
+class CaseTests(unittest.TestCase):
+    def test_forced_outcomes_change_result(self):
+        tournament = Tournament(["A", "B"], [])
+        model = fit_model(tournament.teams, tournament.matches)
+        won = simulate(
+            tournament,
+            model,
+            sims=50,
+            seed=1,
+            uncertainty=False,
+            forced={0: 0},
+        )
+        lost = simulate(
+            tournament,
+            model,
+            sims=50,
+            seed=1,
+            uncertainty=False,
+            forced={0: 5},
+        )
+        self.assertEqual(won.forecasts["A"].place_probs, [1.0, 0.0])
+        self.assertEqual(lost.forecasts["A"].place_probs, [0.0, 1.0])
+        self.assertEqual(won.forecasts["A"].expected_wins, 1.0)
+        self.assertEqual(lost.forecasts["A"].expected_wins, 0.0)
+
+    def test_forced_selected_team_second_in_pair(self):
+        tournament = Tournament(["A", "B"], [])
+        model = fit_model(tournament.teams, tournament.matches)
+        # Пара всегда (A, B), B — вторая команда; победа B задаётся
+        # исходом «A проиграла 0:3».
+        result = simulate(
+            tournament,
+            model,
+            sims=30,
+            seed=2,
+            uncertainty=False,
+            forced={0: 5},
+        )
+        self.assertEqual(result.forecasts["B"].expected_wins, 1.0)
+        self.assertEqual(result.forecasts["B"].place_probs, [1.0, 0.0])
+
+    def test_invalid_forced_arguments(self):
+        tournament = Tournament(["A", "B"], [])
+        model = fit_model(tournament.teams, tournament.matches)
+        with self.assertRaises(ValueError):
+            simulate(
+                tournament,
+                model,
+                sims=10,
+                uncertainty=False,
+                forced={1: 0},
+            )
+        with self.assertRaises(ValueError):
+            simulate(
+                tournament,
+                model,
+                sims=10,
+                uncertainty=False,
+                forced={0: 6},
+            )
+
+    def _four_team_cases(self):
+        tournament = Tournament(
+            ["A", "B", "C", "D"],
+            [
+                Match("A", "B", 3, 0),
+                Match("A", "C", 3, 1),
+                Match("B", "C", 3, 2),
+                Match("B", "D", 3, 0),
+            ],
+        )
+        model = fit_model(tournament.teams, tournament.matches)
+        cases = build_team_cases(
+            tournament,
+            model,
+            team="A",
+            sims=3000,
+            seed=7,
+            uncertainty=False,
+        )
+        return tournament, model, cases
+
+    def test_build_team_cases(self):
+        tournament, model, cases = self._four_team_cases()
+        self.assertIsNotNone(cases)
+        assert cases is not None
+        self.assertEqual(cases.simulations, 3000)
+        self.assertEqual(cases.worst.wins, 0)
+        self.assertEqual(cases.best.wins, cases.best.total)
+        for case in (cases.worst, cases.best):
+            self.assertAlmostEqual(sum(case.place_probabilities), 1.0, places=9)
+        self.assertLessEqual(
+            cases.worst.place_probabilities[0],
+            cases.best.place_probabilities[0],
+        )
+
+    def test_no_remaining_matches(self):
+        tournament = Tournament(["A", "B"], [Match("A", "B", 3, 0)])
+        model = fit_model(tournament.teams, tournament.matches)
+        self.assertIsNone(
+            build_team_cases(
+                tournament, model, team="A", sims=100, uncertainty=False
+            )
+        )
+
+    def test_cases_in_reports(self):
+        tournament, model, cases = self._four_team_cases()
+        result = simulate(
+            tournament,
+            model,
+            sims=500,
+            seed=11,
+            team="A",
+            uncertainty=False,
+        )
+        text = format_report(
+            tournament, model, result, team="A", target_place=1, cases=cases
+        )
+        self.assertIn("Разборы при заданных результатах", text)
+        self.assertIn("Лучший — все оставшиеся матчи выиграны 3:0", text)
+        self.assertIn("худший — проиграны 0:3", text)
+        self.assertIn("Место", text)
+        self.assertNotIn("Наихудший сценарий", text)
+
+        markdown = format_markdown(
+            tournament, model, result, team="A", target_place=1, cases=cases
+        )
+        self.assertIn("### Разборы при заданных результатах", markdown)
+        self.assertIn("| Место | Лучший | Худший |", markdown)
+        self.assertNotIn("#### Худший случай", markdown)
+        self.assertNotIn("Наихудший сценарий", markdown)
+
+        payload = report_to_dict(
+            tournament, model, result, team="A", target_place=1, cases=cases
+        )
+        block = payload["team_analysis"]["cases"]
+        self.assertIsNotNone(block)
+        assert block is not None
+        self.assertEqual(set(block), {"simulations", "worst", "best"})
+        for key in ("worst", "best"):
+            self.assertAlmostEqual(
+                sum(block[key]["place_probabilities"]), 1.0, places=9
             )
 
 

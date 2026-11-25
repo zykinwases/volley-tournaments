@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .model import StrengthModel
-from .tournament import Tournament
+from .tournament import OUTCOMES, Tournament
 
 # (побеждает a?, очки победителя, очки проигравшего, партии победителя, партии проигравшего)
 _OUTCOME_INFO: tuple[tuple[bool, int, int, int, int], ...] = (
@@ -114,6 +114,7 @@ def simulate(
     rating_draws: int = 64,
     scenarios_per_place: int = 25,
     progress: Callable[[int], None] | None = None,
+    forced: dict[int, int] | None = None,
 ) -> SimulationResult:
     """Разыгрывает оставшиеся матчи ``sims`` раз.
 
@@ -123,6 +124,11 @@ def simulate(
 
     ``progress`` — необязательный колбэк, который периодически получает
     число уже разыгранных турниров (для индикатора прогресса).
+
+    ``forced`` — необязательный словарь «индекс оставшегося матча → индекс
+    исхода» (0–5 в порядке ``OUTCOMES``). Такие матчи не разыгрываются,
+    а всегда получают заданный исход; используется для разборов вида
+    «что если команда всё проиграет / всё выиграет».
     """
     if sims < 1:
         raise ValueError("Число симуляций должно быть положительным")
@@ -135,6 +141,16 @@ def simulate(
     team_index = index[team] if team is not None else None
 
     remaining = tournament.remaining_pairs()
+    if forced:
+        for match_index, outcome in forced.items():
+            if not 0 <= match_index < len(remaining):
+                raise ValueError(
+                    f"Некорректный индекс матча в forced: {match_index}"
+                )
+            if not 0 <= outcome < len(OUTCOMES):
+                raise ValueError(
+                    f"Некорректный исход в forced: {outcome}"
+                )
     standings = tournament.standings()
     base_wins = [standings[t].wins for t in teams]
     base_points = [standings[t].points for t in teams]
@@ -180,11 +196,14 @@ def simulate(
             sets_lost = base_sets_lost[:]
 
             outcomes: list[int] = []
-            for cumulative, deltas in tables:
-                value = rng.random()
-                outcome = 0
-                while value > cumulative[outcome]:
-                    outcome += 1
+            for match_index, (cumulative, deltas) in enumerate(tables):
+                if forced is not None and match_index in forced:
+                    outcome = forced[match_index]
+                else:
+                    value = rng.random()
+                    outcome = 0
+                    while value > cumulative[outcome]:
+                        outcome += 1
                 outcomes.append(outcome)
 
                 winner, loser, win_points, lose_points, win_sets, lose_sets = (
