@@ -9,6 +9,8 @@ from volley.model import fit_model
 from volley.progress import ProgressBar
 from volley.report import (
     _md_escape,
+    _share_percent,
+    _simulations_note,
     format_markdown,
     format_report,
     report_to_dict,
@@ -548,6 +550,44 @@ class CaseTests(unittest.TestCase):
             self.assertAlmostEqual(
                 sum(block[key]["place_probabilities"]), 1.0, places=9
             )
+
+
+class SimulationSpaceTests(unittest.TestCase):
+    def test_share_percent(self):
+        self.assertEqual(_share_percent(1, 10), "10%")
+        self.assertEqual(_share_percent(1, 4), "25%")
+        self.assertEqual(_share_percent(100, 216), "46.3%")
+        self.assertEqual(_share_percent(1000, 46_656), "2.14%")
+        self.assertEqual(_share_percent(1, 1_000_000), "1.0·10⁻⁴%")
+
+    def test_simulations_note(self):
+        self.assertEqual(
+            _simulations_note(100, 3),
+            "100 (из 216 возможных исходов, 46.3%)",
+        )
+        self.assertEqual(
+            _simulations_note(500, 3),
+            "500 на 216 возможных исходов (в среднем 2.3 на исход)",
+        )
+        self.assertEqual(_simulations_note(1000, 0), "1 000")
+
+    def test_report_header_contains_outcome_space(self):
+        tournament = Tournament(["A", "B", "C"], [])
+        model = fit_model(tournament.teams, tournament.matches)
+        result = simulate(
+            tournament, model, sims=100, seed=1, uncertainty=False
+        )
+        text = format_report(tournament, model, result)
+        self.assertIn(
+            "Симуляций: 100 (из 216 возможных исходов, 46.3%)", text
+        )
+        payload = report_to_dict(tournament, model, result)
+        self.assertEqual(payload["outcome_combinations"], 216)
+        markdown = format_markdown(tournament, model, result)
+        self.assertIn(
+            "**Симуляций:** 100 (из 216 возможных исходов, 46.3%)",
+            markdown,
+        )
 
 
 class IOAndReportTests(unittest.TestCase):

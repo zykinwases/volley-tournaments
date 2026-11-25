@@ -19,6 +19,46 @@ def _pct(value: float, digits: int = 1) -> str:
     return f"{value * 100:.{digits}f}"
 
 
+_SUPERSCRIPT = str.maketrans("0123456789-", "⁰¹²³⁴⁵⁶⁷⁸⁹⁻")
+
+
+def _format_int(value: int) -> str:
+    return f"{value:,}".replace(",", " ")
+
+
+def _share_percent(part: int, total: int) -> str:
+    """Доля ``part`` от ``total`` в процентах, включая очень малые значения."""
+    if total <= 0:
+        return "—"
+    percent = part / total * 100
+    if percent >= 10:
+        return f"{percent:.1f}%".replace(".0%", "%")
+    if percent >= 1:
+        return f"{percent:.2f}%"
+    if percent >= 0.01:
+        return f"{percent:.4f}%"
+    mantissa, exponent = f"{percent:.1e}".split("e")
+    return f"{mantissa}·10{str(int(exponent)).translate(_SUPERSCRIPT)}%"
+
+
+def _simulations_note(sims: int, remaining: int) -> str:
+    """Число симуляций и размер пространства возможных исходов."""
+    simulations = _format_int(sims)
+    if remaining <= 0:
+        return simulations
+    space = len(OUTCOMES) ** remaining
+    if sims <= space:
+        return (
+            f"{simulations} (из {_format_int(space)} возможных исходов, "
+            f"{_share_percent(sims, space)})"
+        )
+    average = sims / space
+    return (
+        f"{simulations} на {_format_int(space)} возможных исходов "
+        f"(в среднем {average:.1f} на исход)"
+    )
+
+
 def _ratio(sets_won: float, sets_lost: float) -> str:
     if sets_lost == 0:
         return "∞" if sets_won else "—"
@@ -399,8 +439,8 @@ def format_report(
         else "по точечным оценкам силы"
     )
     info = (
-        f"Симуляций: {result.sims:,}".replace(",", " ")
-        + f"; модель Брэдли–Терри по партиям, prior={model.prior:.2f}, {mode}."
+        f"Симуляций: {_simulations_note(result.sims, total - played)}"
+        f"; модель Брэдли–Терри по партиям, prior={model.prior:.2f}, {mode}."
     )
     lines.extend(textwrap.wrap(info, width=LINE_WIDTH))
     if elapsed is not None:
@@ -521,7 +561,9 @@ def format_markdown(
         if data["model"]["rating_uncertainty"]
         else "по точечным оценкам силы"
     )
-    simulations = f"{data['simulations']:,}".replace(",", " ")
+    simulations = _simulations_note(
+        data["simulations"], data["total_matches"] - data["played_matches"]
+    )
     lines.append(
         f"- **Симуляций:** {simulations}; модель Брэдли–Терри по партиям, "
         f"prior={data['model']['prior']:.2f}, {mode}"
@@ -864,6 +906,8 @@ def report_to_dict(
         "played_matches": len(tournament.matches),
         "total_matches": tournament.total_matches,
         "simulations": result.sims,
+        "outcome_combinations": len(OUTCOMES)
+        ** (tournament.total_matches - len(tournament.matches)),
         "model": {
             "type": "bradley-terry-sets",
             "prior": model.prior,
